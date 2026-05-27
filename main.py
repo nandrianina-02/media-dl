@@ -18,7 +18,7 @@ OUT_DIR = "/tmp/media-dl"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Media Downloader API", version="4.2.0")
+app = FastAPI(title="Media Downloader API", version="4.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,15 +41,6 @@ VIDEO_FORMATS = ["mp4"]
 FORMATS       = AUDIO_FORMATS + VIDEO_FORMATS
 QUALITIES     = {"64": "9", "128": "5", "192": "3", "320": "0"}
 
-# ── Args anti-bot ─────────────────────────────────────────────────────────────
-# bgutil-ytdlp-pot-provider est détecté automatiquement par yt-dlp
-# Il gère les PO Tokens YouTube sans configuration manuelle
-def ytdlp_common_args() -> list[str]:
-    return [
-        "--no-warnings",
-        "--sleep-interval", "1",
-    ]
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def detect_site(url: str) -> str:
     mapping = {
@@ -65,6 +56,9 @@ def detect_site(url: str) -> str:
         if domain in url:
             return name
     return "Unknown"
+
+def is_facebook(url: str) -> bool:
+    return "facebook.com" in url or "fb.watch" in url
 
 def is_supported(url: str) -> bool:
     return any(s in url for s in SUPPORTED_SITES)
@@ -86,6 +80,39 @@ def check_api_key(x_api_key: str = Header(default="")) -> bool:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return True
 
+def build_format_selector(url: str, quality: str) -> str:
+    """
+    Retourne le sélecteur de format vidéo adapté au site.
+    Facebook ne supporte pas les formats mp4+m4a séparés,
+    on utilise 'best' comme fallback systématique.
+    """
+    if is_facebook(url):
+        # Facebook : toujours best, pas de merge
+        if quality == "360":
+            return "best[height<=360]/best"
+        elif quality == "720":
+            return "best[height<=720]/best"
+        elif quality == "1080":
+            return "best[height<=1080]/best"
+        else:
+            return "best"
+    else:
+        # YouTube, Vimeo, etc. : format précis avec fallback
+        if quality == "360":
+            return "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]/best"
+        elif quality == "720":
+            return "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best"
+        elif quality == "1080":
+            return "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best"
+        else:
+            return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+
+def ytdlp_common_args() -> list[str]:
+    return [
+        "--no-warnings",
+        "--sleep-interval", "1",
+    ]
+
 # ── Download worker ───────────────────────────────────────────────────────────
 def run_download(job_id: str, url: str, fmt: str, quality: str):
     job = active_jobs[job_id]
@@ -97,15 +124,7 @@ def run_download(job_id: str, url: str, fmt: str, quality: str):
     common        = ytdlp_common_args()
 
     if fmt in VIDEO_FORMATS:
-        if quality == "360":
-            fmt_sel = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]"
-        elif quality == "720":
-            fmt_sel = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
-        elif quality == "1080":
-            fmt_sel = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
-        else:
-            fmt_sel = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-
+        fmt_sel = build_format_selector(url, quality)
         cmd = [
             "yt-dlp", "--no-playlist",
             "-f", fmt_sel,
@@ -152,7 +171,29 @@ def run_download(job_id: str, url: str, fmt: str, quality: str):
         else:
             job.update(status="error", error="Fichier introuvable après téléchargement")
     else:
-        err = result.stderr[-400:] or f"exit code {result.returncode}"
+        # Retry avec "best" si le format n'est pas disponible
+        if "Requested format is not available" in result.stderr and fmt in VIDEO_FORMATS:
+            print(f"[RETRY] Format non disponible, tentative avec best...", flush=True)
+            retry_cmd = [
+                "yt-dlp", "--no-playlist",
+                "-f", "best",
+                "--merge-output-format", "mp4",
+                *common,
+                "-o", out_template,
+                url,
+            ]
+            result2 = subprocess.run(retry_cmd, capture_output=True, text=True)
+            if result2.returncode == 0:
+                found = next(
+                    (os.path.join(OUT_DIR, f) for f in os.listdir(OUT_DIR) if f.startswith(job_id)),
+                    None,
+                )
+                if found:
+                    job.update(status="done", progress=100, file=found, filename=os.path.basename(found))
+                    return
+            err = result2.stderr[-400:] or f"exit code {result2.returncode}"
+        else:
+            err = result.stderr[-400:] or f"exit code {result.returncode}"
         job.update(status="error", error=err)
 
 # ── Cleanup loop ──────────────────────────────────────────────────────────────
@@ -175,14 +216,14 @@ threading.Thread(target=cleanup_loop, daemon=True).start()
 def root():
     return {
         "name": "Media Downloader API",
-        "version": "4.2.0",
+        "version": "4.3.0",
         "supported_sites": SUPPORTED_SITES,
         "formats": FORMATS,
     }
 
 @app.get("/ping")
 def ping():
-    return {"ok": True, "version": "4.2.0"}
+    return {"ok": True, "version": "4.3.0"}
 
 @app.get("/info")
 async def get_info(url: str = Query(...), _: bool = Depends(check_api_key)):
