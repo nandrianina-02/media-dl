@@ -113,7 +113,7 @@ def run_download(job_id: str, url: str, fmt: str, quality: str):
             url,
         ]
 
-    if os.path.exists(cookies_path):
+    if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
         cmd += ["--cookies", cookies_path]
 
     print(f"[CMD] {' '.join(cmd)}", flush=True)
