@@ -4,7 +4,6 @@ import time
 import threading
 import subprocess
 import urllib.parse
-from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Header, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +18,7 @@ OUT_DIR = "/tmp/media-dl"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Media Downloader API", version="4.0.0")
+app = FastAPI(title="Media Downloader API", version="4.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,6 +40,15 @@ AUDIO_FORMATS = ["mp3", "wav", "ogg", "m4a"]
 VIDEO_FORMATS = ["mp4"]
 FORMATS       = AUDIO_FORMATS + VIDEO_FORMATS
 QUALITIES     = {"64": "9", "128": "5", "192": "3", "320": "0"}
+
+# ── Args anti-bot ─────────────────────────────────────────────────────────────
+# bgutil-ytdlp-pot-provider est détecté automatiquement par yt-dlp
+# Il gère les PO Tokens YouTube sans configuration manuelle
+def ytdlp_common_args() -> list[str]:
+    return [
+        "--no-warnings",
+        "--sleep-interval", "1",
+    ]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def detect_site(url: str) -> str:
@@ -86,7 +94,7 @@ def run_download(job_id: str, url: str, fmt: str, quality: str):
 
     audio_quality = QUALITIES.get(quality, "5")
     out_template  = os.path.join(OUT_DIR, f"{job_id}_%(title)s.%(ext)s")
-    cookies_path  = os.path.join(os.path.dirname(__file__), "cookies.txt")
+    common        = ytdlp_common_args()
 
     if fmt in VIDEO_FORMATS:
         if quality == "360":
@@ -97,29 +105,28 @@ def run_download(job_id: str, url: str, fmt: str, quality: str):
             fmt_sel = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
         else:
             fmt_sel = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+
         cmd = [
             "yt-dlp", "--no-playlist",
             "-f", fmt_sel,
             "--merge-output-format", "mp4",
+            *common,
             "-o", out_template,
             url,
         ]
     else:
-        # Extraction audio
         cmd = [
             "yt-dlp", "--no-playlist",
             "-x", "--audio-format", fmt,
             "--audio-quality", audio_quality,
+            *common,
             "-o", out_template,
             url,
         ]
 
-    if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
-        cmd += ["--cookies", cookies_path]
-
     print(f"[CMD] {' '.join(cmd)}", flush=True)
 
-    # Fake progressive progress while subprocess runs
+    # Fake progressive progress
     def fake_progress():
         for pct in range(10, 90, 5):
             time.sleep(1.5)
@@ -168,28 +175,36 @@ threading.Thread(target=cleanup_loop, daemon=True).start()
 def root():
     return {
         "name": "Media Downloader API",
-        "version": "4.0.0",
+        "version": "4.2.0",
         "supported_sites": SUPPORTED_SITES,
         "formats": FORMATS,
     }
 
 @app.get("/ping")
 def ping():
-    return {"ok": True, "version": "4.0.0"}
+    return {"ok": True, "version": "4.2.0"}
 
 @app.get("/info")
 async def get_info(url: str = Query(...), _: bool = Depends(check_api_key)):
     if not is_supported(url):
         raise HTTPException(400, "Site non supporté")
-    
+
+    info_cmd = [
+        "yt-dlp", "--dump-json", "--no-playlist",
+        *ytdlp_common_args(),
+        url,
+    ]
+
     try:
         result = subprocess.run(
-            ["yt-dlp", "--dump-json", "--no-playlist", url],
-            capture_output=True, text=True, timeout=15
+            info_cmd,
+            capture_output=True, text=True, timeout=20
         )
+
         if result.returncode != 0:
+            print(f"[INFO ERROR] {result.stderr[-400:]}", flush=True)
             raise HTTPException(400, "Impossible de récupérer les infos")
-        
+
         data = json.loads(result.stdout)
         return {
             "title":     data.get("title", ""),
@@ -200,6 +215,10 @@ async def get_info(url: str = Query(...), _: bool = Depends(check_api_key)):
         }
     except subprocess.TimeoutExpired:
         raise HTTPException(408, "Timeout")
+    except json.JSONDecodeError:
+        raise HTTPException(500, "Réponse invalide de yt-dlp")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
