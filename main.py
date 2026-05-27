@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import json
 
 # ── Config ────────────────────────────────────────────────────────────────────
 API_KEY = os.environ.get("API_KEY", "526dcdb0e21f7a515ebcf12a89d865d5bf5af0b16cd9f8400639de0ff0951d87")
@@ -175,6 +176,32 @@ def root():
 @app.get("/ping")
 def ping():
     return {"ok": True, "version": "4.0.0"}
+
+@app.get("/info")
+async def get_info(url: str = Query(...), _: bool = Depends(check_api_key)):
+    if not is_supported(url):
+        raise HTTPException(400, "Site non supporté")
+    
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--dump-json", "--no-playlist", url],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            raise HTTPException(400, "Impossible de récupérer les infos")
+        
+        data = json.loads(result.stdout)
+        return {
+            "title":     data.get("title", ""),
+            "author":    data.get("uploader") or data.get("channel", ""),
+            "thumbnail": data.get("thumbnail", ""),
+            "duration":  data.get("duration"),
+            "site":      data.get("extractor_key", detect_site(url)),
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(408, "Timeout")
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 class DownloadRequest(BaseModel):
