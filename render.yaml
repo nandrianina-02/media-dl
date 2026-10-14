@@ -1,0 +1,40 @@
+# Déploiement sur Render (Blueprint) : New > Blueprint, dépôt media-dl.
+#
+# Offre gratuite : 512 Mo de mémoire, une fraction de processeur, pas de
+# disque. Les limites ci-dessous en tiennent compte : une seule conversion à
+# la fois, médias et playlists plus courts. L'historique repart de zéro à
+# chaque redémarrage (pas de disque persistant sur l'offre gratuite).
+services:
+  - type: web
+    name: media-dl-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: refonte
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /ping
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://media-dl-one.vercel.app
+      - key: MAX_CONCURRENT
+        value: "1"
+      - key: MAX_ACTIVE_PER_VISITOR
+        value: "2"
+      - key: MAX_QUEUE
+        value: "10"
+      - key: MAX_DURATION
+        value: "3600"
+      - key: MAX_FILESIZE
+        value: "500M"
+      - key: MAX_PLAYLIST_ITEMS
+        value: "25"
+      - key: JOB_TIMEOUT
+        value: "1800"
+      - key: FILE_TTL
+        value: "1800"
+      # Saisis dans le tableau de bord Render, jamais dans ce fichier.
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
