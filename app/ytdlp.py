@@ -74,8 +74,23 @@ def commande_telechargement(
     max_taille: str,
     max_elements: int,
     fichier_chemins: str,
+    nom: str | None = None,
+    duree_cible: float | None = None,
 ) -> list[str]:
-    gabarit = "%(playlist_index)03d - %(title).120B.%(ext)s" if liste else "%(title).150B.%(ext)s"
+    """Commande de téléchargement.
+
+    `nom` impose le nom du fichier (sans extension). `duree_cible` sert aux
+    recherches (« ytsearch5:… ») : seul un résultat de durée proche est
+    retenu, le premier qui convient, pour écarter clips et versions longues.
+    """
+    if nom:
+        gabarit = nettoyer_nom_fichier(nom).replace("%", "%%") + ".%(ext)s"
+    else:
+        gabarit = "%(playlist_index)03d - %(title).120B.%(ext)s" if liste else "%(title).150B.%(ext)s"
+    filtre = f"!is_live & duration <=? {max_duree}"
+    if duree_cible:
+        ecart = max(10, round(duree_cible * 0.08))
+        filtre += f" & duration >=? {max(0, round(duree_cible) - ecart)} & duration <=? {round(duree_cible) + ecart}"
     cmd = [
         *binaire,
         "--newline",
@@ -88,7 +103,7 @@ def commande_telechargement(
         "-o", gabarit,
         "--max-filesize", max_taille,
         # Ni direct ni média trop long : vérifié avant tout téléchargement.
-        "--match-filter", f"!is_live & duration <=? {max_duree}",
+        "--match-filter", filtre,
         "--socket-timeout", "30",
         "--retries", "3",
         "--no-mtime",
@@ -98,6 +113,8 @@ def commande_telechargement(
         if options.elements:
             choisis = sorted({i for i in options.elements if 1 <= i <= max_elements})
             cmd += ["--playlist-items", ",".join(str(i) for i in choisis)]
+    elif duree_cible:
+        cmd += ["--max-downloads", "1"]
     else:
         cmd += ["--no-playlist"]
 
@@ -222,6 +239,13 @@ def resume_infos(data: dict, *, liste: bool) -> dict:
         "hauteurs": hauteurs_disponibles(data.get("formats") or []),
         "sous_titres": sous_titres[:40],
     }
+
+
+def nettoyer_nom_fichier(nom: str) -> str:
+    """Nom imposé à yt-dlp : sans caractère interdit sous Windows ni chemin."""
+    nom = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "", nom)
+    nom = re.sub(r"\s+", " ", nom).strip(" .")
+    return nom[:150] or "morceau"
 
 
 def nettoyer_nom(nom: str) -> str:

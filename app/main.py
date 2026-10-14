@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from .config import settings
 from .erreurs import message_clair
 from .limites import Limiteur
+from .spotify import ErreurSpotify, Spotify, resume as resume_spotify
 from .store import Registre
 from .taches import Gestionnaire, Refus
 from .urls import SITES, AdresseInvalide, a_une_liste, analyser
@@ -34,6 +35,7 @@ registre = Registre(settings.db_path)
 gestionnaire = Gestionnaire(settings, registre)
 limite_infos = Limiteur(settings.info_per_minute, 60)
 limite_telechargements = Limiteur(settings.downloads_per_hour, 3600)
+spotify = Spotify(settings.spotify_client_id, settings.spotify_client_secret, settings.spotify_market)
 
 
 async def _nettoyage_periodique() -> None:
@@ -83,6 +85,12 @@ def ip_de(requete: Request) -> str:
     return requete.client.host if requete.client else "inconnue"
 
 
+def _type_spotify(url: str) -> tuple[str, str]:
+    # Adresse déjà normalisée par analyser() : https://open.spotify.com/{type}/{id}
+    type_, ident = url.rstrip("/").split("/")[-2:]
+    return type_, ident
+
+
 def limiter(limiteur: Limiteur, cle: str) -> None:
     ok, attente = limiteur.autoriser(cle)
     if not ok:
@@ -102,7 +110,7 @@ def accueil():
     return {
         "nom": "MediaDL",
         "version": VERSION,
-        "sites": sorted(set(SITES.values())),
+        "sites": sorted({s for s in SITES.values() if s != "Spotify" or spotify.configure}),
         "formats": {"audio": AUDIO, "video": VIDEO},
         "qualites": {"audio": list(QUALITES_AUDIO), "video": list(QUALITES_VIDEO)},
         "limites": {
@@ -127,6 +135,13 @@ async def infos(requete: Request, url: str = Query(..., max_length=2048), liste:
         adresse = analyser(url, garder_liste=liste)
     except AdresseInvalide as erreur:
         raise HTTPException(400, str(erreur)) from None
+
+    if adresse.site == "Spotify":
+        try:
+            collection = await spotify.lire(*_type_spotify(adresse.url), settings.max_playlist_items)
+        except ErreurSpotify as erreur:
+            raise HTTPException(erreur.code, str(erreur)) from None
+        return resume_spotify(collection, adresse.url, settings.max_playlist_items)
 
     cmd = commande_infos(settings.ytdlp_bin, adresse.url, liste=adresse.liste, max_elements=settings.max_playlist_items)
     try:
@@ -196,6 +211,23 @@ async def creer(demande: Demande, requete: Request, x_visiteur: str | None = Hea
     if demande.debut is not None and demande.fin is not None and demande.fin <= demande.debut:
         raise HTTPException(400, "La fin de l'extrait doit suivre son début.")
 
+    morceaux = None
+    titre = demande.titre
+    if adresse.site == "Spotify":
+        if demande.format in VIDEO:
+            raise HTTPException(400, "Spotify ne fournit que de l'audio : choisissez un format audio.")
+        try:
+            collection = await spotify.lire(*_type_spotify(adresse.url), settings.max_playlist_items)
+        except ErreurSpotify as erreur:
+            raise HTTPException(erreur.code, str(erreur)) from None
+        morceaux = collection.morceaux
+        if adresse.liste and demande.elements:
+            choisis = set(demande.elements)
+            morceaux = [m for m in morceaux if m.index in choisis]
+        if not morceaux:
+            raise HTTPException(400, "Aucun morceau à télécharger dans cette sélection.")
+        titre = titre or collection.titre
+
     options = Options(
         format=demande.format,
         qualite=qualite,
@@ -205,7 +237,7 @@ async def creer(demande: Demande, requete: Request, x_visiteur: str | None = Hea
         pochette=demande.pochette,
         elements=demande.elements if adresse.liste else [],
     )
-    return await gestionnaire.creer(visiteur, adresse, options, demande.titre)
+    return await gestionnaire.creer(visiteur, adresse, options, titre, morceaux)
 
 
 def _tache_du_visiteur(ident: str, x_visiteur: str | None) -> str:

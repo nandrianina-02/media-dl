@@ -40,6 +40,26 @@ Chaque navigateur envoie un identifiant anonyme dans l'en-tête `X-Visiteur` :
 il sépare les files et les historiques, sans compte. Les identifiants de
 téléchargement sont aléatoires, un lien de fichier ne se devine pas.
 
+## Spotify
+
+L'audio de Spotify est chiffré (DRM) : il n'est ni lu ni contourné. Pour un
+titre, un album ou une playlist Spotify, le serveur :
+
+1. lit les métadonnées par l'API Spotify (titre, artistes, album, durée,
+   pochette) ;
+2. cherche chaque morceau sur YouTube et garde, parmi les cinq premiers
+   résultats, le premier dont la durée est proche (±10 s ou ±8 %) ; à défaut,
+   le premier résultat ;
+3. réécrit les étiquettes du fichier et y intègre la pochette de Spotify
+   (`app/etiquettes.py`, avec mutagen).
+
+Il faut une application Spotify : la créer sur
+<https://developer.spotify.com/dashboard> (« Web API »), puis renseigner
+`SPOTIFY_CLIENT_ID` et `SPOTIFY_CLIENT_SECRET` sur le serveur. Sans elles, les
+liens Spotify sont refusés avec un message clair. Les playlists créées par
+Spotify lui-même (« Top 50 », « Daily Mix »…) ne sont pas accessibles aux
+nouvelles applications : seules les playlists d'utilisateurs le sont.
+
 ## Limites d'un service public
 
 Toutes réglables par variables d'environnement (voir `.env.example`) :

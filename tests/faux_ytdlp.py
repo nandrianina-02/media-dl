@@ -45,6 +45,14 @@ extension = format_audio or valeur("--merge-output-format") or "mp4"
 if "privee" in url:
     print("ERROR: [youtube] abc: Private video. Sign in if you've been granted access")
     sys.exit(1)
+# Recherche (« ytsearch ») : « introuvable » ne donne rien ; « longue » ne
+# passe pas le filtre de durée, seule la recherche sans durée aboutit.
+recherche = url.startswith("ytsearch")
+if recherche and "introuvable" in url:
+    sys.exit(0)
+if recherche and "longue" in url and "duration >=?" in (valeur("--match-filter") or ""):
+    print("[youtube] abc: does not pass filter, skipping ..")
+    sys.exit(0)
 if "filtre" in url:
     print("[youtube] abc: Titre does not pass filter (!is_live & duration <=? 10800), skipping ..")
     sys.exit(0)
@@ -60,9 +68,13 @@ for element in elements:
         time.sleep(pause)
     print(f"MDL|pp|FFmpegExtractAudio|{element if element else 'NA'}", flush=True)
     nom = f"{element:03d} - Morceau {element}.{extension}" if element else f"Titre d'essai.{extension}"
+    gabarit = valeur("-o") or ""
+    if "%(title)" not in gabarit and "%(playlist_index)" not in gabarit:
+        nom = gabarit.replace("%(ext)s", extension).replace("%%", "%")
     chemin = os.path.join(dossier, nom)
     with open(chemin, "wb") as f:
         f.write(b"contenu " + nom.encode())
     with open(fichier_chemins, "a", encoding="utf-8") as f:
         f.write(chemin + "\n")
-sys.exit(0)
+# Comme yt-dlp : --max-downloads atteint se signale par le code 101.
+sys.exit(101 if "--max-downloads" in args else 0)

@@ -62,5 +62,12 @@ class Settings:
     info_per_minute: int = _int("INFO_PER_MINUTE", 30)
     downloads_per_hour: int = _int("DOWNLOADS_PER_HOUR", 40)
 
+    # Application Spotify (developer.spotify.com), pour lire les titres,
+    # albums et playlists. Sans elle, les liens Spotify sont refusés.
+    spotify_client_id: str = os.environ.get("SPOTIFY_CLIENT_ID", "")
+    spotify_client_secret: str = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+    # Pays du catalogue consulté (disponibilité des titres).
+    spotify_market: str = os.environ.get("SPOTIFY_MARKET", "FR")
+
 
 settings = Settings()

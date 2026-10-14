@@ -12,6 +12,8 @@ from __future__ import annotations
 import urllib.parse
 from dataclasses import dataclass
 
+from .spotify import analyser_adresse as adresse_spotify
+
 # Domaine -> nom affiché. Un sous-domaine (www., m., music.) est accepté.
 SITES: dict[str, str] = {
     "youtube.com": "YouTube",
@@ -29,6 +31,7 @@ SITES: dict[str, str] = {
     "x.com": "Twitter/X",
     "reddit.com": "Reddit",
     "redd.it": "Reddit",
+    "open.spotify.com": "Spotify",
 }
 
 
@@ -88,6 +91,13 @@ def analyser(brute: str, *, garder_liste: bool = False) -> Adresse:
             return Adresse(f"https://www.youtube.com/watch?v={video}", "YouTube", domaine, False)
         texte = urllib.parse.urlunparse(parties._replace(fragment=""))
         return Adresse(texte, "YouTube", domaine, "/playlist" in parties.path)
+
+    if domaine == "open.spotify.com":
+        try:
+            type_, ident = adresse_spotify(parties)
+        except ValueError as erreur:
+            raise AdresseInvalide(str(erreur)) from None
+        return Adresse(f"https://open.spotify.com/{type_}/{ident}", "Spotify", domaine, type_ != "track")
 
     if domaine == "soundcloud.com":
         liste = "/sets/" in parties.path or parties.path.rstrip("/").endswith(("/tracks", "/albums", "/likes"))
